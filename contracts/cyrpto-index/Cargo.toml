@@ -1,5 +1,5 @@
 [package]
-name = "crypto_fund"
+name = "crypto-index"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -8,9 +8,14 @@ publish = false
 crate-type = ["cdylib"]
 doctest = false
 
+[workspace.dependencies]
+soroban-sdk = { version = "21.6.0" }
+soroban-token-sdk = { version = "21.6.0" }
+
 [dependencies]
 soroban-sdk = { workspace = true }
 soroban-token-sdk = { workspace = true }
 
 [dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
+soroban-sdk = { workspace = true, features = [] }
+soroban-token-sdk = { workspace = true, features = [] }

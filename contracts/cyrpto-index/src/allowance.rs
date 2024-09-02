@@ -40,12 +40,11 @@ pub fn write_allowance(
     e.storage().temporary().set(&key.clone(), &allowance);
 
     if amount > 0 {
-        e.storage().temporary().bump(
-            &key,
-            expiration_ledger
-                .checked_sub(e.ledger().sequence())
-                .unwrap(),
-        )
+        let live_for = expiration_ledger
+            .checked_sub(e.ledger().sequence())
+            .unwrap();
+
+        e.storage().temporary().extend_ttl(&key, live_for, live_for)
     }
 }
 
@@ -54,11 +53,13 @@ pub fn spend_allowance(e: &Env, from: Address, spender: Address, amount: i128) {
     if allowance.amount < amount {
         panic!("insufficient allowance");
     }
-    write_allowance(
-        e,
-        from,
-        spender,
-        allowance.amount - amount,
-        allowance.expiration_ledger,
-    );
+    if amount > 0 {
+        write_allowance(
+            e,
+            from,
+            spender,
+            allowance.amount - amount,
+            allowance.expiration_ledger,
+        );
+    }
 }

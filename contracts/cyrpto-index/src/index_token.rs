@@ -1,32 +1,20 @@
-use crate::admin::{has_administrator, read_administrator, write_administrator};
+use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_token_sdk::{metadata::TokenMetadata, TokenUtils};
 use crate::allowance::{read_allowance, spend_allowance, write_allowance};
-use crate::balance::{is_authorized, write_authorization};
 use crate::balance::{read_balance, receive_balance, spend_balance};
-use crate::event;
-use crate::metadata::{read_decimal, read_name, read_symbol, write_metadata};
-use soroban_sdk::{contractimpl, Address, Bytes, Env, String};
-use soroban_token_sdk::TokenMetadata;
-
-pub trait IndexTokenTrait {
-    fn initialize_index(e: Env, admin: Address, decimal: u32, name: String, symbol: String);
-
-    fn add_asset(e: Env, asset: Address, amount: i128);
-
-    fn remove_asset(e: Env, asset: Address, amount: i128);
-
-    fn get_asset_amount(e: Env, asset: Address) -> i128;
-
-    fn set_admin(e: Env, new_admin: Address);
-}
-
+use crate::storage_types::{DataKey, INSTANCE_BUMP_AMOUNT, INSTANCE_LIFETIME_THRESHOLD};
+use crate::metadata::{read_name, read_decimal, read_symbol, write_metadata};
+use crate::admin::{has_administrator, write_administrator, read_administrator};
+// Define the IndexToken contract
 #[contract]
 pub struct IndexToken;
 
+// Implement the contract's methods
 #[contractimpl]
-impl IndexTokenTrait for IndexToken {
-    fn initialize_index(e: Env, admin: Address, decimal: u32, name: String, symbol: String) {
+impl IndexToken {
+    pub fn initialize(e: Env, admin: Address, decimal: u32, name: String, symbol: String) {
         if has_administrator(&e) {
-            panic!("already initialized");
+            panic!("already initialized")
         }
         write_administrator(&e, &admin);
         if decimal > 18 {
@@ -40,46 +28,155 @@ impl IndexTokenTrait for IndexToken {
                 name,
                 symbol,
             },
-        );
+        )
     }
 
-    fn add_asset(e: Env, asset: Address, amount: i128) {
-        asset.require_auth();
-        check_nonnegative_amount(amount);
-
+    pub fn add_token(e: Env, token_address: Address, amount: i128) {
         let admin = read_administrator(&e);
         admin.require_auth();
+        let token_address_clone1 = token_address.clone();
+        let token_address_clone2 = token_address.clone();
+        // Here you might implement logic to interact with the specific token contract
+        // For now, this is a placeholder
+        let token_balance = e.storage().instance().get::<_, i128>(&DataKey::Balance(token_address)).unwrap_or(0);
+        e.storage().instance().set(&DataKey::Balance(token_address_clone1), &(token_balance + amount));
 
-        let asset_balance = read_balance(&e, asset.clone());
-        receive_balance(&e, asset, amount);
-        event::mint(&e, admin, asset, amount);
+        TokenUtils::new(&e).events().mint(admin, token_address_clone2, amount);
     }
 
-    fn remove_asset(e: Env, asset: Address, amount: i128) {
-        asset.require_auth();
-        check_nonnegative_amount(amount);
-
+    pub fn remove_token(e: Env, token_address: Address, amount: i128) {
         let admin = read_administrator(&e);
         admin.require_auth();
+        let token_address_clone1 = token_address.clone();
+        // Here you might implement logic to interact with the specific token contract
+        // For now, this is a placeholder
+        let token_balance = e.storage().instance().get::<_, i128>(&DataKey::Balance(token_address)).unwrap_or(0);
+        if token_balance < amount {
+            panic!("insufficient token balance");
+        }
 
-        spend_balance(&e, asset.clone(), amount);
-        event::burn(&e, asset, amount);
+        e.storage().instance().set(&DataKey::Balance(token_address_clone1), &(token_balance - amount));
+
+        TokenUtils::new(&e).events().burn(admin, amount);
     }
 
-    fn get_asset_amount(e: Env, asset: Address) -> i128 {
-        read_balance(&e, asset)
+    pub fn get_token_balance(e: Env, token_address: Address) -> i128 {
+        e.storage().instance().get::<_, i128>(&DataKey::Balance(token_address)).unwrap_or(0)
     }
 
-    fn set_admin(e: Env, new_admin: Address) {
+    pub fn update_nav(e: Env, new_nav: i128) {
         let admin = read_administrator(&e);
         admin.require_auth();
-        write_administrator(&e, &new_admin);
-        event::set_admin(&e, admin, new_admin);
+        e.storage().instance().set(&DataKey::NAV, &new_nav);
+    }
+
+    pub fn get_nav(e: Env) -> i128 {
+        e.storage().instance().get::<_, i128>(&DataKey::NAV).unwrap_or(0)
     }
 }
 
+impl soroban_sdk::token::Interface for IndexToken {
+    fn allowance(e: Env, from: Address, spender: Address) -> i128 {
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        read_allowance(&e, from, spender).amount
+    }
+
+    fn approve(e: Env, from: Address, spender: Address, amount: i128, expiration_ledger: u32) {
+        from.require_auth();
+
+        check_nonnegative_amount(amount);
+
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        write_allowance(&e, from.clone(), spender.clone(), amount, expiration_ledger);
+        TokenUtils::new(&e)
+            .events()
+            .approve(from, spender, amount, expiration_ledger);
+    }
+
+    fn balance(e: Env, id: Address) -> i128 {
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        read_balance(&e, id)
+    }
+
+    fn transfer(e: Env, from: Address, to: Address, amount: i128) {
+        from.require_auth();
+
+        check_nonnegative_amount(amount);
+
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        spend_balance(&e, from.clone(), amount);
+        receive_balance(&e, to.clone(), amount);
+        TokenUtils::new(&e).events().transfer(from, to, amount);
+    }
+
+    fn transfer_from(e: Env, spender: Address, from: Address, to: Address, amount: i128) {
+        spender.require_auth();
+
+        check_nonnegative_amount(amount);
+
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        spend_allowance(&e, from.clone(), spender, amount);
+        spend_balance(&e, from.clone(), amount);
+        receive_balance(&e, to.clone(), amount);
+        TokenUtils::new(&e).events().transfer(from, to, amount)
+    }
+
+    fn burn(e: Env, from: Address, amount: i128) {
+        from.require_auth();
+
+        check_nonnegative_amount(amount);
+
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        spend_balance(&e, from.clone(), amount);
+        TokenUtils::new(&e).events().burn(from, amount);
+    }
+
+    fn burn_from(e: Env, spender: Address, from: Address, amount: i128) {
+        spender.require_auth();
+
+        check_nonnegative_amount(amount);
+
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        spend_allowance(&e, from.clone(), spender, amount);
+        spend_balance(&e, from.clone(), amount);
+        TokenUtils::new(&e).events().burn(from, amount)
+    }
+
+    fn decimals(e: Env) -> u32 {
+        read_decimal(&e)
+    }
+
+    fn name(e: Env) -> String {
+        read_name(&e)
+    }
+
+    fn symbol(e: Env) -> String {
+        read_symbol(&e)
+    }
+}
+
+// Helper function to check non-negative amounts
 fn check_nonnegative_amount(amount: i128) {
     if amount < 0 {
-        panic!("negative amount is not allowed: {}", amount);
+        panic!("negative amount is not allowed: {}", amount)
     }
 }
